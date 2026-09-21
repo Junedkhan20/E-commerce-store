@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Uniblox — Checkout & Rewards</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:2rem;background:#f7f7f9;color:#1a1a1a}
+header{margin-bottom:2rem}
+header h1{margin:0;font-size:1.6rem}
+header p{margin:.25rem 0 0;color:#555}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1rem}
+.card{background:#fff;border:1px solid #e2e2e6;border-radius:12px;padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.card h3{margin:.25rem 0 .5rem;font-size:1rem}
+.card .price{font-weight:600;color:#2a6}
+.card .inv{font-size:.85rem;color:#777}
+.card button{margin-top:.5rem;padding:.4rem .8rem;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer}
+.card button:hover{background:#f0f0f5}
+section{margin-bottom:2rem}
+.section-title{font-size:1.1rem;font-weight:600;margin-bottom:.75rem;border-bottom:2px solid #ddd;padding-bottom:.25rem}
+pre{background:#222;color:#eee;padding:.75rem;border-radius:8px;overflow:auto;font-size:.85rem}
+.small{font-size:.85rem;color:#666}
+.status{display:inline-block;padding:.15rem .4rem;border-radius:4px;font-size:.75rem;background:#e6f0fa;color:#1a4d8f}
+</style>
+</head>
+<body>
+<header>
+<h1>Uniblox — Checkout & Rewards</h1>
+<p>Demo of the reliable checkout service (integer-cents money, idempotency keys, inventory guards, milestone coupons).</p>
+</header>
+
+<section>
+<div class="section-title">Products <span class="small">(inventory reserved at add-to-cart)</span></div>
+<div id="products" class="grid"></div>
+</section>
+
+<section>
+<div class="section-title">Cart <button onclick="createCart()">New Cart</button></div>
+<div id="cart-state" class="small">No active cart.</div>
+<div id="cart-items" style="margin-top:.5rem"></div>
+<div id="cart-checkout" style="margin-top:.75rem"></div>
+</section>
+
+<section>
+<div class="section-title">Checkout</div>
+<div id="checkout-form">
+<button onclick="checkoutCart()">Checkout (no coupon)</button>
+<button onclick="checkoutWithCoupon()">Checkout with Coupon</button>
+</div>
+</section>
+
+<section>
+<div class="section-title">Admin</div>
+<div style="margin-bottom:.5rem">
+<button onclick="generateCoupon()">Generate Coupon (milestone-based)</button>
+<button onclick="loadReport()">Load Report</button>
+</div>
+<div id="admin-output"></div>
+</section>
+
+<section>
+<div class="section-title">Event Log</div>
+<pre id="log"></pre>
+</section>
+
+<script>
+const API = 'http://localhost:3000';
+let currentCart = null;
+let couponCode = null;
+
+function log(msg){
+const el = document.getElementById('log');
+el.textContent += msg + '\n';
+el.scrollTop = el.scrollHeight;
+}
+
+async function loadProducts(){
+const res = await fetch(API + '/products');
+const data = await res.json();
+const grid = document.getElementById('products');
+grid.innerHTML = data.products.map(p => `
+  <div class="card">
+    <h3>${p.name}</h3>
+    <div class="price">$${p.price.toFixed(2)}</div>
+    <div class="inv">Inventory: ${p.inventory}</div>
+    <button onclick="addItem('${p.id}', 1)">Add to Cart</button>
+  </div>
+`).join('');
+}
+
+async function createCart(){
+const res = await fetch(API + '/carts', {method:'POST', headers:{'Content-Type':'application/json'}});
+const data = await res.json();
+currentCart = data.cart;
+document.getElementById('cart-state').textContent = 'Active cart: ' + currentCart.id + ' | Status: ' + currentCart.status;
+renderCart();
+log('Created cart ' + currentCart.id);
+}
+
+async function addItem(productId, qty){
+if(!currentCart){ log('No active cart'); return; }
+const res = await fetch(API + '/carts/' + currentCart.id + '/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({productId, qty})});
+const data = await res.json();
+currentCart = data.cart;
+renderCart();
+log('Added ' + qty + ' x ' + productId + ' → ' + (res.ok ? 'OK' : res.status + ' ' + data.error?.code));
+}
+
+function renderCart(){
+const el = document.getElementById('cart-items');
+if(!currentCart || currentCart.items.length === 0){
+el.innerHTML = '<div class="small">Cart is empty.</div>'; return;}
+el.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.9rem"><thead><tr><th align="left">Product</th><th>Qty</th><th>Line</th></tr></thead><tbody>' +
+currentCart.items.map(it => `<tr><td>${it.productId}</td><td>${it.qty}</td><td>$${it.lineTotal.toFixed(2)}</td></tr>`).join('') +
+'</tbody></table><div class="small" style="margin-top:.25rem">Subtotal: $' + currentCart.subtotal.toFixed(2) + '</div>';
+const checkoutBtn = document.getElementById('cart-checkout');
+if(currentCart.status === 'open'){
+checkoutBtn.innerHTML = '<button onclick="checkoutCart()">Checkout</button> <button onclick="checkoutWithCoupon()">Checkout with Coupon</button>';
+} else {
+checkoutBtn.innerHTML = '<span class="status">Checked out (order ' + (currentCart.orderId || 'n/a') + ')</span>';
+}
+}
+
+async function checkoutCart(){
+if(!currentCart){ log('No active cart'); return; }
+const res = await fetch(API + '/carts/' + currentCart.id + '/checkout', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+const data = await res.json();
+if(res.ok){
+log('Checkout OK → order ' + data.order.id + ' total $' + data.order.total.toFixed(2));
+currentCart = null; document.getElementById('cart-state').textContent = 'Cart checked out. Create a new cart.'; document.getElementById('cart-items').innerHTML = '';
+} else { log('Checkout failed: ' + res.status + ' ' + data.error?.code); }
+}
+
+async function checkoutWithCoupon(){
+if(!currentCart){ log('No active cart'); return; }
+if(!couponCode){ log('No coupon available. Generate one via Admin.'); return; }
+const res = await fetch(API + '/carts/' + currentCart.id + '/checkout', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({couponCode})});
+const data = await res.json();
+if(res.ok){
+log('Checkout with coupon OK → order ' + data.order.id + ' discount $' + data.order.discount.toFixed(2) + ' total $' + data.order.total.toFixed(2));
+currentCart = null; document.getElementById('cart-state').textContent = 'Cart checked out. Create a new cart.'; document.getElementById('cart-items').innerHTML = '';
+} else { log('Checkout with coupon failed: ' + res.status + ' ' + data.error?.code); }
+}
+
+async function generateCoupon(){
+const res = await fetch(API + '/admin/coupons/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+const data = await res.json();
+if(data.generated){ couponCode = data.coupon.code; log('Coupon generated: ' + couponCode + ' (' + data.coupon.percent + '% off)'); document.getElementById('admin-output').textContent = 'Coupon: ' + couponCode; }
+else { log('No coupon generated (milestone not reached): ' + data.reason); document.getElementById('admin-output').textContent = 'No coupon: ' + data.reason; }
+}
+
+async function loadReport(){
+const res = await fetch(API + '/admin/report');
+const data = await res.json();
+const r = data.report;
+const html = `<pre>${JSON.stringify(r, null, 2)}</pre>`;
+document.getElementById('admin-output').innerHTML = html;
+log('Report: ' + r.totalOrders + ' orders, gross=$' + r.grossRevenue.toFixed(2) + ', net=$' + r.netRevenue.toFixed(2) + ', coupons=' + r.couponsGenerated + '/' + r.couponsRedeemed);
+}
+
+loadProducts();
+</script>
+</body>
+</html>
