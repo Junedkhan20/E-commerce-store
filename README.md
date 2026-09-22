@@ -2,6 +2,9 @@
 
 A concise Node.js/Express backend demonstrating reliable checkout, inventory guards, idempotency, milestone coupons, integer-cents money handling, and concurrency controls. Includes a small demo frontend.
 
+![Uploading Screenshot 2026-09-22 213203.png…]()
+
+
 ## Quick start
 
 ```bash
